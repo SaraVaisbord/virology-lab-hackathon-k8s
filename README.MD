@@ -1,57 +1,49 @@
-# K8S People Management
+# Kubernetes – מערכת אימות טפסי התחייבות (המעבדה המרכזית לנגיפים)
 
-Kubernetes manifests for a 3-tier people management application on AWS EKS.
+קובצי Kubernetes להרצת [virology-lab-hackathon-app](https://github.com/SaraVaisbord/virology-lab-hackathon-app) על אשכול EKS שמוקם ב-[virology-lab-hackathon-infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra).
 
-## Architecture
+> **סטטוס:** הקבצים הועתקו מאפליקציה קודמת ועדיין **מותאמים** – ראו "מה נשאר להתאים" למטה. לא לפרוס לפני כן.
+
+## ארכיטקטורה מתוכננת
 
 ```
-Internet → ALB → Frontend → Backend → MySQL
+אינטרנט → ALB → /      → frontend (nginx, קבצי React)
+              → /api   → backend (FastAPI: OCR, ברקודים, Gemini, תור עיבוד)
+                              └─ דיסק קבוע (EBS gp3): מסד הנתונים + תמונות העמודים
 ```
 
-- **Frontend**: Nginx serving static files (port 80)
-- **Backend**: REST API (port 8000)
-- **Database**: MySQL 8.0 (port 3306)
+- **frontend** – nginx שמגיש את הממשק (פורט 80).
+- **backend** – FastAPI (פורט 8000), עותק אחד: תור העיבוד רץ בתוך התהליך, והמסד הוא SQLite על הדיסק הקבוע.
+- **סודות** – מפתחות Gemini מ-AWS Secrets Manager דרך External Secrets.
 
-## Prerequisites
+## מבנה
 
-- AWS EKS cluster
-- [External Secrets Operator](https://external-secrets.io/) installed
-- AWS Secrets Manager secret at `people-mgnt-PeopleManagement/db-pass` with keys:
-  - `DB_USER`
-  - `DB_PASSWORD`
-  - `MYSQL_ROOT_PASSWORD`
+```
+namespace.yaml
+ingress.yaml           ALB: / → frontend, /api → backend
+backend/               Deployment, Service, ConfigMap, kustomization (תמונת ECR)
+frontend/              Deployment, Service, kustomization (תמונת ECR)
+operators/             SecretStore + ExternalSecret (AWS Secrets Manager)
+db/                    MySQL של האפליקציה הקודמת – יוסר
+```
 
-## Deployment
+## פריסה (אחרי ההתאמות)
 
 ```bash
 kubectl apply -f namespace.yaml
 kubectl apply -f operators/
-kubectl apply -f db/
-kubectl apply -f backend/
-kubectl apply -f frontend/
+kubectl apply -k backend/
+kubectl apply -k frontend/
 kubectl apply -f ingress.yaml
 ```
 
-## Configuration
+## מה נשאר להתאים
 
-Database connection is configured via ConfigMap (`app-config`) and Secret (`app-secret`):
-
-- **Host**: `mysql`
-- **Port**: `3306`
-- **Database**: `peopledb`
-
-Credentials are synced from AWS Secrets Manager every hour.
-
-## Access
-
-The application is exposed via AWS ALB Ingress:
-
-- `/` → Frontend
-- `/api` → Backend API
-
-## Database Schema
-
-The `people` table includes:
-- `id`, `name`, `role`, `email`, `status`, `join_date`, `department`, `avatar`
-
-Schema is initialized automatically on first deployment.
+- [ ] **דיסק קבוע ל-backend** – PersistentVolumeClaim (gp3) שמחובר ל-`/app/data`; בלעדיו הנתונים נמחקים בכל הפעלה מחדש.
+- [ ] **הסרת `db/`** (MySQL והטבלה `people` שייכים לאפליקציה הקודמת).
+- [ ] **ConfigMap ו-Secret** – `APP_DATA_DIR`, `LLM_ENABLED`, `WORKER_ENABLED`, `CORS_ORIGINS` ומפתחות `GEMINI_API_KEY*` במקום פרטי MySQL.
+- [ ] **משאבים** – ל-backend לפחות 1.5–2Gi זיכרון ומעבד אחד (כרגע 256Mi / 0.2).
+- [ ] **בדיקת תקינות** – `/api/health` במקום `/api`.
+- [ ] **נתיבים** – קידומת `/api` ב-backend, ובניית ה-frontend עם `VITE_API_BASE_URL=/api`.
+- [ ] **תמונות ECR** – שמות ותגיות של האפליקציה הזו ב-`kustomization.yaml`.
+- [ ] **הגבלת גישה ל-ALB** – `alb.ingress.kubernetes.io/inbound-cidrs` (אין עדיין מסך כניסה במערכת).
