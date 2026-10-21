@@ -25,7 +25,8 @@ function Invoke-Checked([scriptblock] $Command) {
 }
 
 # 1. Infrastructure values
-$out = Invoke-Checked { terraform -chdir="$InfraDir" output -json } | ConvertFrom-Json
+Push-Location $InfraDir   # (not -chdir=: Windows PowerShell 5.1 mangles "-flag=value" arguments to native tools)
+try { $out = Invoke-Checked { terraform output -json } | ConvertFrom-Json } finally { Pop-Location }
 $region = ($out.cluster_connect.value -split "--region ")[1].Split(" ")[0]
 $cluster = ($out.cluster_connect.value -split "--name ")[1].Trim()
 $backendRepo = $out.ecr_repositories.value.backend
@@ -65,13 +66,13 @@ foreach ($file in Get-ChildItem $here -Recurse -Filter *.yaml) {
     if ($text -match '\$\{[A-Z_]+\}') { throw "Unfilled placeholder $($Matches[0]) in $($file.Name)" }
     $target = Join-Path $rendered $file.FullName.Substring($here.Length + 1)
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
-    Set-Content -Path $target -Value $text -Encoding utf8
+    [System.IO.File]::WriteAllText($target, $text, (New-Object System.Text.UTF8Encoding $false))  # UTF-8 without BOM
 }
 foreach ($part in @("namespace.yaml", "operators", "backend", "frontend", "ingress.yaml")) {
     Invoke-Checked { kubectl apply -f (Join-Path $rendered $part) }
 }
-Invoke-Checked { kubectl -n virology-lab rollout status deployment/backend --timeout=10m }
-Invoke-Checked { kubectl -n virology-lab rollout status deployment/frontend --timeout=5m }
+Invoke-Checked { kubectl -n virology-lab rollout status deployment/backend '--timeout=10m' }
+Invoke-Checked { kubectl -n virology-lab rollout status deployment/frontend '--timeout=5m' }
 
 $address = ""
 for ($i = 0; $i -lt 60 -and -not $address; $i++) {
