@@ -39,7 +39,8 @@ if (-not $AllowedCidrs) {
 # 2. Images → ECR
 if (-not $SkipBuild) {
     $registry = $backendRepo.Split("/")[0]
-    Invoke-Checked { aws ecr get-login-password --region $region | docker login --username AWS --password-stdin $registry }
+    # Piped through cmd: a PowerShell 5.1 pipe re-encodes the password and ECR answers 400 Bad Request.
+    Invoke-Checked { cmd /c "aws ecr get-login-password --region $region | docker login --username AWS --password-stdin $registry" }
     Invoke-Checked { docker build -t "${backendRepo}:$Tag" (Join-Path $AppDir "backend") }
     Invoke-Checked { docker build -t "${frontendRepo}:$Tag" --build-arg VITE_API_BASE_URL=/api (Join-Path $AppDir "frontend") }
     Invoke-Checked { docker push "${backendRepo}:$Tag" }
