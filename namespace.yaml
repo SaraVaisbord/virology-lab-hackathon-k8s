@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: people-management
+  labels:
+    project: people-management
+    env: demo
