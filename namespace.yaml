@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: people-management
+  name: virology-lab
   labels:
-    project: people-management
+    project: virology-lab-hackathon
     env: demo

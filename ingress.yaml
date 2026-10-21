@@ -1,32 +1,33 @@
+# The public address (AWS ALB): /api/* → backend, everything else → frontend.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: people-management-ingress
-  namespace: people-management
-  labels:
-    app: people-management
+  name: virology-lab
+  namespace: virology-lab
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: /
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
-    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60
+    # No login screen yet: only these addresses may reach the system.
+    alb.ingress.kubernetes.io/inbound-cidrs: ${ALLOWED_CIDRS}
+    # Uploading a multi-page PDF straightens every page before answering.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
 spec:
   ingressClassName: alb
   rules:
-  - http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: frontend
-            port:
-              number: 80
-      - path: /api
-        pathType: Prefix
-        backend:
-          service:
-            name: backend
-            port:
-              number: 8000
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

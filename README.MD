@@ -2,48 +2,51 @@
 
 קובצי Kubernetes להרצת [virology-lab-hackathon-app](https://github.com/SaraVaisbord/virology-lab-hackathon-app) על אשכול EKS שמוקם ב-[virology-lab-hackathon-infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra).
 
-> **סטטוס:** הקבצים הועתקו מאפליקציה קודמת ועדיין **מותאמים** – ראו "מה נשאר להתאים" למטה. לא לפרוס לפני כן.
-
-## ארכיטקטורה מתוכננת
+## ארכיטקטורה
 
 ```
-אינטרנט → ALB → /      → frontend (nginx, קבצי React)
-              → /api   → backend (FastAPI: OCR, ברקודים, Gemini, תור עיבוד)
-                              └─ דיסק קבוע (EBS gp3): מסד הנתונים + תמונות העמודים
+אינטרנט (רק מכתובות מורשות) → ALB
+   ├── /api/*  → backend (FastAPI: OCR, ברקודים, Gemini, תור עיבוד)
+   │              ├── RDS PostgreSQL – שרת מסד נתונים נפרד, גיבוי יומי + שחזור לכל רגע ב-7 הימים האחרונים
+   │              └── S3 – באקט פרטי ומוצפן לקבצים ולתמונות העמודים (לא במסד הנתונים)
+   └── /       → frontend (nginx + React)
+
+סודות (חיבור למסד, מפתחות Gemini) → AWS Secrets Manager → External Secrets → Secret ב-Kubernetes
+גישת ה-backend ל-S3 → IAM role (IRSA) שמורשה רק לבאקט הזה
 ```
 
-- **frontend** – nginx שמגיש את הממשק (פורט 80).
-- **backend** – FastAPI (פורט 8000), עותק אחד: תור העיבוד רץ בתוך התהליך, והמסד הוא SQLite על הדיסק הקבוע.
-- **סודות** – מפתחות Gemini מ-AWS Secrets Manager דרך External Secrets.
+ה-backend לא שומר שום דבר על הדיסק שלו: אם הוא נופל או מופעל מחדש, שום נתון לא הולך לאיבוד.
 
-## מבנה
+## קבצים
 
 ```
-namespace.yaml
-ingress.yaml           ALB: / → frontend, /api → backend
-backend/               Deployment, Service, ConfigMap, kustomization (תמונת ECR)
-frontend/              Deployment, Service, kustomization (תמונת ECR)
-operators/             SecretStore + ExternalSecret (AWS Secrets Manager)
-db/                    MySQL של האפליקציה הקודמת – יוסר
+namespace.yaml                  virology-lab
+operators/                      SecretStore + ExternalSecret (מסד נתונים + מפתחות Gemini)
+backend/                        ServiceAccount (IRSA), ConfigMap, Deployment, Service
+frontend/                       Deployment, Service
+ingress.yaml                    ALB: /api → backend, / → frontend, גישה רק מכתובות מורשות
+deploy.ps1                      בנייה, דחיפה ל-ECR ופריסה
 ```
 
-## פריסה (אחרי ההתאמות)
+ערכים שנקבעים רק אחרי הקמת התשתית מופיעים בקבצים כ-`${...}` (למשל `${FILES_BUCKET}`), ו-`deploy.ps1` ממלא אותם מתוך `terraform output`.
 
-```bash
-kubectl apply -f namespace.yaml
-kubectl apply -f operators/
-kubectl apply -k backend/
-kubectl apply -k frontend/
-kubectl apply -f ingress.yaml
+## פריסה
+
+אחרי `aws sso login` ו-`terraform apply` ב-[infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra), ואחרי הכנסת מפתחות Gemini לסוד `<prefix>/gemini`:
+
+```powershell
+.\deploy.ps1 -InfraDir ..\virology-lab-hackathon-infra -AppDir <תיקיית האפליקציה>
 ```
 
-## מה נשאר להתאים
+הסקריפט:
+1. קורא מ-Terraform את כתובות ה-ECR, שם הבאקט, ה-IAM role והאזור
+2. בונה את שתי התמונות ודוחף אותן ל-ECR (אפשר לדלג עם `-SkipBuild`)
+3. ממלא את הערכים בקבצים, מחיל אותם ומחכה שהכול יעלה
+4. מדפיס את כתובת המערכת
 
-- [ ] **דיסק קבוע ל-backend** – PersistentVolumeClaim (gp3) שמחובר ל-`/app/data`; בלעדיו הנתונים נמחקים בכל הפעלה מחדש.
-- [ ] **הסרת `db/`** (MySQL והטבלה `people` שייכים לאפליקציה הקודמת).
-- [ ] **ConfigMap ו-Secret** – `APP_DATA_DIR`, `LLM_ENABLED`, `WORKER_ENABLED`, `CORS_ORIGINS` ומפתחות `GEMINI_API_KEY*` במקום פרטי MySQL.
-- [ ] **משאבים** – ל-backend לפחות 1.5–2Gi זיכרון ומעבד אחד (כרגע 256Mi / 0.2).
-- [ ] **בדיקת תקינות** – `/api/health` במקום `/api`.
-- [ ] **נתיבים** – קידומת `/api` ב-backend, ובניית ה-frontend עם `VITE_API_BASE_URL=/api`.
-- [ ] **תמונות ECR** – שמות ותגיות של האפליקציה הזו ב-`kustomization.yaml`.
-- [ ] **הגבלת גישה ל-ALB** – `alb.ingress.kubernetes.io/inbound-cidrs` (אין עדיין מסך כניסה במערכת).
+ברירת המחדל: הגישה פתוחה רק לכתובת האינטרנט של המחשב שמריץ את הסקריפט. כתובות נוספות: `-AllowedCidrs "1.2.3.4/32,5.6.7.8/32"`.
+
+## לפני שימוש עם נתונים אמיתיים
+
+- [ ] מסך כניסה למערכת (כרגע הגישה מוגבלת רק לפי כתובת).
+- [ ] HTTPS – תעודה ב-ACM ו-listener על פורט 443 ב-ingress.

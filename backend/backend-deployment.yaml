@@ -2,66 +2,54 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: people-management
+  namespace: virology-lab
   labels:
     app: backend
-    tier: application
 spec:
-  replicas: 1
+  replicas: 1                       # one extraction worker; the data is in RDS and S3, so a restart loses nothing
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: backend
-      tier: application
   template:
     metadata:
       labels:
         app: backend
-        tier: application
     spec:
+      serviceAccountName: backend
       containers:
-      - name: backend
-        image: people-management-backend
-        ports:
-        - containerPort: 8000
-          name: http
-        env:
-        - name: DB_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-config
-              key: DB_HOST
-        - name: DB_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-config
-              key: DB_PORT
-        - name: DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-config
-              key: DB_NAME
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: app-secret
-              key: DB_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secret
-              key: DB_PASSWORD
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "256Mi"
-            cpu: "200m"
-        readinessProbe:
-          httpGet:
-            path: /api
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
+        - name: backend
+          image: ${BACKEND_IMAGE}
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets   # DATABASE_URL + GEMINI_API_KEY*
+          resources:                    # OCR + image processing of 300 dpi pages
+            requests:
+              memory: "1536Mi"
+              cpu: "1"
+            limits:
+              memory: "3Gi"
+              cpu: "2"
+          startupProbe:                 # first start runs the database migrations
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 20
+            failureThreshold: 3
