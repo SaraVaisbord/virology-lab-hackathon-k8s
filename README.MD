@@ -1,52 +1,67 @@
-# Kubernetes – מערכת אימות טפסי התחייבות (המעבדה המרכזית לנגיפים)
+# Kubernetes Deployment — Commitment Form Validation
 
-קובצי Kubernetes להרצת [virology-lab-hackathon-app](https://github.com/SaraVaisbord/virology-lab-hackathon-app) על אשכול EKS שמוקם ב-[virology-lab-hackathon-infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra).
+Kubernetes manifests and a deployment script that run
+[virology-lab-hackathon-app](https://github.com/SaraVaisbord/virology-lab-hackathon-app) on the EKS cluster
+provisioned by [virology-lab-hackathon-infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra).
 
-## ארכיטקטורה
-
-```
-אינטרנט (רק מכתובות מורשות) → ALB
-   ├── /api/*  → backend (FastAPI: OCR, ברקודים, Gemini, תור עיבוד)
-   │              ├── RDS PostgreSQL – שרת מסד נתונים נפרד, גיבוי יומי + שחזור לכל רגע ב-7 הימים האחרונים
-   │              └── S3 – באקט פרטי ומוצפן לקבצים ולתמונות העמודים (לא במסד הנתונים)
-   └── /       → frontend (nginx + React)
-
-סודות (חיבור למסד, מפתחות Gemini) → AWS Secrets Manager → External Secrets → Secret ב-Kubernetes
-גישת ה-backend ל-S3 → IAM role (IRSA) שמורשה רק לבאקט הזה
-```
-
-ה-backend לא שומר שום דבר על הדיסק שלו: אם הוא נופל או מופעל מחדש, שום נתון לא הולך לאיבוד.
-
-## קבצים
+## Architecture
 
 ```
-namespace.yaml                  virology-lab
-operators/                      SecretStore + ExternalSecret (מסד נתונים + מפתחות Gemini)
-backend/                        ServiceAccount (IRSA), ConfigMap, Deployment, Service
-frontend/                       Deployment, Service
-ingress.yaml                    ALB: /api → backend, / → frontend, גישה רק מכתובות מורשות
-deploy.ps1                      בנייה, דחיפה ל-ECR ופריסה
+https://virolab.site  (Route 53 ALIAS → ALB; ACM certificate, HTTP redirected to HTTPS, TLS 1.2+)
+   ├── /api/*  → backend   FastAPI — login, extraction queue, OCR, barcodes, Claude / Gemini
+   │                ├── Amazon RDS PostgreSQL — dedicated, private, backed up
+   │                └── Amazon S3 — private bucket for uploads and page images (never in the database)
+   └── /       → frontend  nginx serving the React build
+
+Secrets   AWS Secrets Manager → External Secrets Operator → Kubernetes Secret → backend environment
+S3 access IAM role for the backend's service account (IRSA), scoped to the files bucket only
 ```
 
-ערכים שנקבעים רק אחרי הקמת התשתית מופיעים בקבצים כ-`${...}` (למשל `${FILES_BUCKET}`), ו-`deploy.ps1` ממלא אותם מתוך `terraform output`.
+The backend keeps no state on its own disk: if the pod restarts, nothing is lost.
 
-## פריסה
+## Repository layout
 
-אחרי `aws sso login` ו-`terraform apply` ב-[infra](https://github.com/SaraVaisbord/virology-lab-hackathon-infra), ואחרי הכנסת מפתחות Gemini לסוד `<prefix>/gemini`:
+```
+namespace.yaml        the virology-lab namespace
+operators/            SecretStore + ExternalSecret (database connection and application keys)
+backend/              ServiceAccount (IRSA), ConfigMap, Deployment, Service
+frontend/             Deployment, Service
+ingress.yaml          ALB: HTTPS (ACM), /api → backend, / → frontend, optional source-address allow-list
+deploy.ps1            build, push to ECR, render and apply the manifests, point the domain at the ALB
+```
+
+Values known only after the infrastructure exists appear as `${...}` placeholders (for example `${FILES_BUCKET}`,
+`${CERTIFICATE_ARN}`); `deploy.ps1` fills them from `terraform output`.
+
+## Deployment
+
+Prerequisites: `aws sso login`, a completed `terraform apply` in the infra repository, the application keys stored in
+the `<prefix>/gemini` secret (see the infra README), Docker running, and `kubectl`.
 
 ```powershell
-.\deploy.ps1 -InfraDir ..\virology-lab-hackathon-infra -AppDir <תיקיית האפליקציה>
+.\deploy.ps1 -InfraDir ..\virology-lab-hackathon-infra -AppDir <path to the app repository>
 ```
 
-הסקריפט:
-1. קורא מ-Terraform את כתובות ה-ECR, שם הבאקט, ה-IAM role והאזור
-2. בונה את שתי התמונות ודוחף אותן ל-ECR (אפשר לדלג עם `-SkipBuild`)
-3. ממלא את הערכים בקבצים, מחיל אותם ומחכה שהכול יעלה
-4. מדפיס את כתובת המערכת
+The script:
 
-ברירת המחדל: הגישה פתוחה רק לכתובת האינטרנט של המחשב שמריץ את הסקריפט. כתובות נוספות: `-AllowedCidrs "1.2.3.4/32,5.6.7.8/32"`.
+1. reads the ECR repositories, bucket, IAM role, region, domain and certificate from `terraform output`;
+2. builds both images and pushes them to ECR (`-SkipBuild` to reuse existing images);
+3. renders the manifests, applies them and waits for the rollout;
+4. points the domain and `www` at the ALB with Route 53 ALIAS records and prints the address.
 
-## לפני שימוש עם נתונים אמיתיים
+| Parameter | Default | Purpose |
+|---|---|---|
+| `-AllowedCidrs` | this computer's public IP | Source addresses allowed through the ALB, comma-separated (`0.0.0.0/0` = everyone, behind the login screen) |
+| `-LlmEnabled` | `true` | `false` runs only the local extraction stages (no AI tokens) |
+| `-Tag` | current date and time | Image tag |
+| `-SkipBuild` | off | Deploy without rebuilding the images |
 
-- [ ] מסך כניסה למערכת (כרגע הגישה מוגבלת רק לפי כתובת).
-- [ ] HTTPS – תעודה ב-ACM ו-listener על פורט 443 ב-ingress.
+## Production readiness
+
+- [x] HTTPS on a custom domain with an auto-renewing ACM certificate; HTTP redirected to HTTPS
+- [x] Login screen with a one-time code; every API call requires a session
+- [x] Secrets only in AWS Secrets Manager; least-privilege IAM for S3
+- [x] Private, backed-up database; versioned, encrypted file storage
+- [ ] Mail delivery for login codes configured (SMTP) and `AUTH_DEMO_CODE` removed
+- [ ] `AUTH_COOKIE_SECURE=true` once the site is served over HTTPS only
+- [ ] Data-processing review for page images sent to the AI providers
