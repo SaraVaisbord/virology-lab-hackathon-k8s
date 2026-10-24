@@ -58,6 +58,8 @@ $values = @{
     FRONTEND_IMAGE   = "${frontendRepo}:$Tag"
     ALLOWED_CIDRS    = $AllowedCidrs
     LLM_ENABLED      = $LlmEnabled
+    DOMAIN           = $out.domain_name.value
+    CERTIFICATE_ARN  = $out.certificate_arn.value
 }
 $rendered = Join-Path ([System.IO.Path]::GetTempPath()) "virology-lab-manifests"
 Remove-Item -Recurse -Force $rendered -ErrorAction SilentlyContinue
@@ -80,4 +82,17 @@ for ($i = 0; $i -lt 60 -and -not $address; $i++) {
     $address = kubectl -n virology-lab get ingress virology-lab -o jsonpath="{.status.loadBalancer.ingress[0].hostname}"
     if (-not $address) { Start-Sleep 5 }
 }
-Write-Host "`nThe system: http://$address   (open to: $AllowedCidrs)"
+if (-not $address) { throw "The ALB has no address yet: kubectl -n virology-lab describe ingress virology-lab" }
+
+# 4. DNS: <domain> and www.<domain> → the ALB (ALIAS records, so they follow the ALB if its IPs change)
+$domain = $values.DOMAIN
+$albZone = Invoke-Checked { aws elbv2 describe-load-balancers --region $region --query "LoadBalancers[?DNSName=='$address'].CanonicalHostedZoneId" --output text }
+$changes = foreach ($name in @($domain, "www.$domain")) {
+    @{ Action = "UPSERT"; ResourceRecordSet = @{ Name = $name; Type = "A"
+        AliasTarget = @{ HostedZoneId = "$albZone".Trim(); DNSName = "dualstack.$address"; EvaluateTargetHealth = $false } } }
+}
+$batch = Join-Path $rendered "dns-change.json"
+[System.IO.File]::WriteAllText($batch, (@{ Changes = @($changes) } | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding $false))
+Invoke-Checked { aws route53 change-resource-record-sets --hosted-zone-id $out.hosted_zone_id.value --change-batch "file://$batch" --query "ChangeInfo.Status" --output text }
+
+Write-Host "`nThe system: https://$domain   (open to: $AllowedCidrs)"

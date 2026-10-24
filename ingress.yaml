@@ -1,4 +1,5 @@
-# The public address (AWS ALB): /api/* → backend, everything else → frontend.
+# The public address https://${DOMAIN} (AWS ALB): /api/* → backend, everything else → frontend.
+# HTTP is redirected to HTTPS; the certificate is from ACM (Terraform, dns.tf in the infra repo) and renews itself.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,15 +8,36 @@ metadata:
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
-    # No login screen yet: only these addresses may reach the system.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: ${CERTIFICATE_ARN}
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06   # TLS 1.2 + 1.3 only
+    # Who may reach the system at all (deploy.ps1 -AllowedCidrs; "0.0.0.0/0" = everyone, behind the login screen).
     alb.ingress.kubernetes.io/inbound-cidrs: ${ALLOWED_CIDRS}
     # Uploading a multi-page PDF straightens every page before answering.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
 spec:
   ingressClassName: alb
   rules:
-    - http:
+    - host: ${DOMAIN}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+    - host: www.${DOMAIN}
+      http:
         paths:
           - path: /api
             pathType: Prefix
