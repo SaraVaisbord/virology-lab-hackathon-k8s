@@ -20,7 +20,7 @@ spec:
       serviceAccountName: backend
       containers:
         - name: backend
-          image: ${BACKEND_IMAGE}
+          image: backend                 # the tag: kustomization.yaml
           ports:
             - containerPort: 8000
               name: http

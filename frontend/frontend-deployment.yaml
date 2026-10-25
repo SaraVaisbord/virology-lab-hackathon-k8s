@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ${FRONTEND_IMAGE}       # nginx + the React build (calls the API at /api)
+          image: frontend                # tag: kustomization.yaml; nginx + the React build (calls the API at /api)
           ports:
             - containerPort: 80
               name: http

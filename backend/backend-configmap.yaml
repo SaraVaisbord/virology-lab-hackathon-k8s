@@ -6,8 +6,8 @@ metadata:
 data:
   API_PREFIX: /api                  # the load balancer sends /api/* here
   STORAGE_BACKEND: s3               # page images and uploads in the private bucket, never in the database
-  S3_BUCKET: ${FILES_BUCKET}
-  AWS_REGION: ${AWS_REGION}
+  S3_BUCKET: FILES_BUCKET
+  AWS_REGION: AWS_REGION
   WORKER_ENABLED: "true"            # the extraction queue runs inside the backend
-  LLM_ENABLED: "${LLM_ENABLED}"
+  LLM_ENABLED: "LLM_ENABLED"
   CORS_ORIGINS: ""                  # same address as the interface — no cross-origin calls

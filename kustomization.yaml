@@ -1,0 +1,74 @@
+# Everything that runs in the cluster: `kubectl apply -k .`
+# The image tags below are what is deployed — the app repository's CI/CD sets them on every release.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - operators/secret-store.yaml
+  - operators/external-secret.yaml
+  - backend/backend-serviceaccount.yaml
+  - backend/backend-configmap.yaml
+  - backend/backend-deployment.yaml
+  - backend/backend-service.yaml
+  - frontend/frontend-deployment.yaml
+  - frontend/frontend-service.yaml
+  - ingress.yaml
+
+images:
+  - name: backend
+    newName: 475568920419.dkr.ecr.us-east-1.amazonaws.com/virology-lab-forms-validation-backend
+    newTag: 20261025-2035
+  - name: frontend
+    newName: 475568920419.dkr.ecr.us-east-1.amazonaws.com/virology-lab-forms-validation-frontend
+    newTag: 20261025-2035
+
+# cluster.env, read only while building: its values replace the same-named placeholders in the manifests.
+configMapGenerator:
+  - name: cluster
+    envs:
+      - cluster.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"   # not applied to the cluster
+
+replacements:
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.AWS_REGION }
+    targets:
+      - select: { kind: ConfigMap, name: backend-config }
+        fieldPaths: [data.AWS_REGION]
+      - select: { kind: SecretStore, name: aws-secretsmanager }
+        fieldPaths: [spec.provider.aws.region]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.FILES_BUCKET }
+    targets:
+      - select: { kind: ConfigMap, name: backend-config }
+        fieldPaths: [data.S3_BUCKET]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.LLM_ENABLED }
+    targets:
+      - select: { kind: ConfigMap, name: backend-config }
+        fieldPaths: [data.LLM_ENABLED]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.BACKEND_ROLE_ARN }
+    targets:
+      - select: { kind: ServiceAccount, name: backend }
+        fieldPaths: ["metadata.annotations.[eks.amazonaws.com/role-arn]"]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.SECRET_PREFIX }
+    targets:
+      - select: { kind: ExternalSecret, name: backend-secrets }
+        fieldPaths: [spec.dataFrom.0.extract.key, spec.dataFrom.1.extract.key]
+        options: { delimiter: /, index: 0 }   # SECRET_PREFIX/db → <prefix>/db
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.CERTIFICATE_ARN }
+    targets:
+      - select: { kind: Ingress, name: virology-lab }
+        fieldPaths: ["metadata.annotations.[alb.ingress.kubernetes.io/certificate-arn]"]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.ALLOWED_CIDRS }
+    targets:
+      - select: { kind: Ingress, name: virology-lab }
+        fieldPaths: ["metadata.annotations.[alb.ingress.kubernetes.io/inbound-cidrs]"]
+  - source: { kind: ConfigMap, name: cluster, fieldPath: data.DOMAIN }
+    targets:
+      - select: { kind: Ingress, name: virology-lab }
+        fieldPaths: [spec.rules.0.host]
+      - select: { kind: Ingress, name: virology-lab }
+        fieldPaths: [spec.rules.1.host]
+        options: { delimiter: ., index: 1 }   # www.DOMAIN → www.<domain>
